@@ -1,6 +1,7 @@
 import os
 import smtplib
 import requests
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -51,30 +52,47 @@ Format :
 Actualités :
 {articles_text}
 """
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            # OpenRouter recommande fortement ces headers pour les modèles gratuits
-            "HTTP-Referer": "https://github.com/Patrickk2/thread-bot",
-            "X-Title": "Thread Bot GitHub Action"
-        },
-        json={
-            # Correction ici : Utilisation du modèle Llama 3.3 70B qui est bien gratuit sur OpenRouter
-            "model": "meta-llama/llama-3.3-70b-instruct:free",
-            "messages": [{"role": "user", "content": prompt}]
-        },
-        timeout=30
-    )
-    data = response.json()
     
-    # Sécurité : on affiche l'erreur brute dans les logs GitHub si l'API échoue
-    if "choices" not in data:
-        print("Erreur retournée par l'API OpenRouter :", data)
-        return None
-        
-    return data["choices"][0]["message"]["content"]
+    # La liste des meilleurs modèles gratuits actuels
+    models_to_try = [
+        "openrouter/free", # Le routeur automatique d'OpenRouter (esquive les erreurs 429)
+        "deepseek/deepseek-chat-v3-0324:free", # Excellent en rédaction
+        "meta-llama/llama-3.3-70b-instruct:free", # Fiabilité maximale
+        "qwen/qwen3-coder:free" # Très puissant sur les sujets tech
+    ]
+    
+    for model in models_to_try:
+        print(f"Tentative de génération avec le modèle : {model}...")
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/Patrickk2/thread-bot",
+                    "X-Title": "Thread Bot GitHub Action"
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=45 # Légèrement augmenté pour laisser le temps aux gros modèles de répondre
+            )
+            data = response.json()
+            
+            if "choices" in data:
+                print(f"✅ Succès avec {model} !")
+                return data["choices"][0]["message"]["content"]
+            
+            print(f"⚠️ Échec avec {model} : {data.get('error', {}).get('message', 'Erreur inconnue')}")
+            time.sleep(3) 
+            
+        except Exception as e:
+            print(f"❌ Erreur réseau avec {model} : {e}")
+            time.sleep(3)
+            
+    print("❌ Erreur critique : Tous les modèles gratuits ont échoué ou sont surchargés.")
+    return None
 
 # --- SEND EMAIL ---
 def send_email(threads_content):
@@ -101,7 +119,7 @@ if __name__ == "__main__":
     
     if threads:
         send_email(threads)
-        print("Email sent.")
+        print("✅ Email sent.")
     else:
-        print("Échec de la génération. L'email n'a pas été envoyé.")
+        print("❌ Échec de la génération. L'email n'a pas été envoyé.")
         exit(1)

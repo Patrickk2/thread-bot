@@ -3,7 +3,7 @@ import smtplib
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import google.generativeai as genai
+from google import genai
 
 # --- CONFIG ---
 NEWS_API_KEY = os.environ["NEWS_API_KEY"]
@@ -28,12 +28,11 @@ def fetch_articles():
         if data.get("articles"):
             for a in data["articles"]:
                 articles.append(f"- {a['title']}: {a.get('description', '')}")
-    return "\n".join(articles[:9])  # max 9 articles
+    return "\n".join(articles[:9])
 
 # --- GENERATE THREADS ---
 def generate_threads(articles_text):
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     prompt = f"""Tu es un créateur de contenu tech/cybersec francophone.
 À partir de ces actualités, génère exactement 3 threads Twitter/Threads en français.
@@ -55,7 +54,10 @@ Format :
 Actualités :
 {articles_text}
 """
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt
+    )
     return response.text
 
 # --- SEND EMAIL ---

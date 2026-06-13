@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    # Lancement quotidien à 08:00 UTC
+    # Lancement quotidien à 08:00 UTC (pour respecter les quotas)
     - cron: '0 8 * * *'
   workflow_dispatch:
 

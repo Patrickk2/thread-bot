@@ -8,12 +8,17 @@ from email.mime.multipart import MIMEMultipart
 
 # --- UTILS POUR LE NETTOYAGE ---
 def safe_encode(text):
-    """Force la conversion en ASCII pur pour éviter les erreurs d'encodage SMTP."""
+    """
+    Force la conversion en ASCII pur (élimine tout caractère dont le code est >= 128).
+    Cela neutralise les espaces insécables (\xa0) et autres caractères invisibles
+    qui provoquent les UnicodeEncodeError dans les bibliothèques SMTP.
+    """
     if not isinstance(text, str):
         text = str(text)
     return "".join(char for char in text if ord(char) < 128)
 
 # --- CONFIG ---
+# Récupération des secrets avec nettoyage immédiat
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GMAIL_USER = safe_encode(os.environ.get("GMAIL_USER", ""))
@@ -36,12 +41,13 @@ def fetch_articles():
             data = r.json()
             if data.get("articles"):
                 for a in data["articles"]:
-                    # Nettoyage à la source
+                    # Nettoyage à la source pour éviter tout caractère invisible
                     title = safe_encode(a.get('title', ''))
                     desc = safe_encode(a.get('description', ''))
                     articles.append(f"- {title}: {desc}")
         except Exception as e:
             print(f"Erreur lors de la récupération des news pour {topic}: {e}")
+    # On limite à 9 articles pour éviter de surcharger le prompt
     return "\n".join(articles[:9])
 
 # --- GENERATE THREADS ---
@@ -61,6 +67,7 @@ Actualités :
 {articles_text}
 """
     
+    # Liste des modèles à tester en cas d'échec
     models_to_try = [
         "openrouter/free",
         "deepseek/deepseek-chat-v3-0324:free",
@@ -102,7 +109,7 @@ Actualités :
 
 # --- SEND EMAIL ---
 def send_email(threads_content):
-    # Nettoyage radical final
+    # Nettoyage radical final du contenu
     clean_content = safe_encode(threads_content)
 
     msg = MIMEMultipart()
@@ -112,14 +119,15 @@ def send_email(threads_content):
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
 
-    # Utilisation explicite de us-ascii
+    # Utilisation explicite de 'us-ascii' pour garantir la compatibilité SMTP stricte
     msg.attach(MIMEText(clean_content, "plain", "us-ascii"))
 
     try:
+        # Connexion avec timeout pour éviter les blocages de session
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
             server.ehlo()
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            # Envoi des bytes pour contourner les codecs Python
+            # Envoi des bytes directement pour contourner les codecs de Python (Fix majeur)
             server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_bytes())
         print("✅ Email envoyé avec succès.")
     except Exception as e:

@@ -4,6 +4,7 @@ import requests
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import Header
 
 # --- CONFIG ---
 NEWS_API_KEY = os.environ["NEWS_API_KEY"]
@@ -28,9 +29,9 @@ def fetch_articles():
             data = r.json()
             if data.get("articles"):
                 for a in data["articles"]:
-                    # Nettoyage basique des titres/descriptions
-                    title = a['title'].replace('\xa0', ' ')
-                    desc = a.get('description', '').replace('\xa0', ' ')
+                    # Nettoyage strict dès la récupération
+                    title = a['title'].replace('\xa0', ' ').replace('\u200b', '')
+                    desc = a.get('description', '').replace('\xa0', ' ').replace('\u200b', '')
                     articles.append(f"- {title}: {desc}")
         except Exception as e:
             print(f"Erreur lors de la récupération des news pour {topic}: {e}")
@@ -39,11 +40,11 @@ def fetch_articles():
 # --- GENERATE THREADS ---
 def generate_threads(articles_text):
     prompt = f"""Tu es un créateur de contenu tech/cybersec francophone.
-À partir de ces actualités, génère exactement 3 threads Twitter/Threads en français.
+À partir de ces actualités, génère exactement 3 threads en français.
 Chaque thread = 5 tweets max, percutants, informatifs, ton humain pas corporate.
 Format :
 
-🧵 THREAD 1 — [Sujet]
+THREAD 1 — [Sujet]
 1/
 ...
 
@@ -92,24 +93,24 @@ Actualités :
 
 # --- SEND EMAIL ---
 def send_email(threads_content):
-    # Nettoyage final pour supprimer les caractères non-ASCII problématiques pour SMTP
-    # On force l'encodage et on décode pour nettoyer les caractères invisibles
-    clean_content = threads_content.encode('utf-8', 'replace').decode('utf-8')
-    clean_content = clean_content.replace('\xa0', ' ')
+    # Nettoyage radical des caractères invisibles ou non-ASCII
+    clean_content = threads_content.replace('\xa0', ' ').replace('\u200b', '')
+    clean_content = clean_content.encode('ascii', 'ignore').decode('ascii')
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "🧵 Tes threads du jour"
+    msg["Subject"] = "Resume des threads du jour"
     msg["From"] = GMAIL_USER
     msg["To"] = TO_EMAIL
 
-    # Attribution explicite de l'encodage utf-8
+    # On utilise 'utf-8' explicitement
     body = MIMEText(clean_content, "plain", "utf-8")
     msg.attach(body)
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_string())
+            # Utilisation de as_bytes() pour éviter la conversion automatique en chaîne ASCII
+            server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_bytes())
         print("✅ Email envoyé avec succès.")
     except Exception as e:
         print(f"❌ Erreur critique lors de l'envoi email : {e}")

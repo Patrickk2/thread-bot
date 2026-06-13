@@ -2,15 +2,22 @@ import os
 import smtplib
 import requests
 import time
+import email.utils
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.header import Header
+
+# --- UTILS POUR LE NETTOYAGE ---
+def safe_encode(text):
+    """Force la conversion en ASCII pur pour éviter les erreurs d'encodage SMTP."""
+    if not isinstance(text, str):
+        text = str(text)
+    return "".join(char for char in text if ord(char) < 128)
 
 # --- CONFIG ---
-NEWS_API_KEY = os.environ["NEWS_API_KEY"]
-OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-GMAIL_USER = os.environ["GMAIL_USER"]
-GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
+NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+GMAIL_USER = safe_encode(os.environ.get("GMAIL_USER", ""))
+GMAIL_APP_PASSWORD = safe_encode(os.environ.get("GMAIL_APP_PASSWORD", ""))
 TO_EMAIL = "elom.karl.patrick@gmail.com"
 
 TOPICS = ["cybersecurity", "artificial intelligence Claude Anthropic", "tech news"]
@@ -29,9 +36,9 @@ def fetch_articles():
             data = r.json()
             if data.get("articles"):
                 for a in data["articles"]:
-                    # Nettoyage strict dès la récupération
-                    title = a['title'].replace('\xa0', ' ').replace('\u200b', '')
-                    desc = a.get('description', '').replace('\xa0', ' ').replace('\u200b', '')
+                    # Nettoyage à la source
+                    title = safe_encode(a.get('title', ''))
+                    desc = safe_encode(a.get('description', ''))
                     articles.append(f"- {title}: {desc}")
         except Exception as e:
             print(f"Erreur lors de la récupération des news pour {topic}: {e}")
@@ -40,12 +47,14 @@ def fetch_articles():
 # --- GENERATE THREADS ---
 def generate_threads(articles_text):
     prompt = f"""Tu es un créateur de contenu tech/cybersec francophone.
-À partir de ces actualités, génère exactement 3 threads en français.
+À partir de ces actualités, génère exactement 3 threads Twitter/Threads en français.
 Chaque thread = 5 tweets max, percutants, informatifs, ton humain pas corporate.
 Format :
 
 THREAD 1 — [Sujet]
 1/
+2/
+3/
 ...
 
 Actualités :
@@ -93,23 +102,24 @@ Actualités :
 
 # --- SEND EMAIL ---
 def send_email(threads_content):
-    # Nettoyage radical des caractères invisibles ou non-ASCII
-    clean_content = threads_content.replace('\xa0', ' ').replace('\u200b', '')
-    clean_content = clean_content.encode('ascii', 'ignore').decode('ascii')
+    # Nettoyage radical final
+    clean_content = safe_encode(threads_content)
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Resume des threads du jour"
+    msg = MIMEMultipart()
+    msg["Subject"] = "Threads Report"
     msg["From"] = GMAIL_USER
     msg["To"] = TO_EMAIL
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid()
 
-    # On utilise 'utf-8' explicitement
-    body = MIMEText(clean_content, "plain", "utf-8")
-    msg.attach(body)
+    # Utilisation explicite de us-ascii
+    msg.attach(MIMEText(clean_content, "plain", "us-ascii"))
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
+            server.ehlo()
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            # Utilisation de as_bytes() pour éviter la conversion automatique en chaîne ASCII
+            # Envoi des bytes pour contourner les codecs Python
             server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_bytes())
         print("✅ Email envoyé avec succès.")
     except Exception as e:

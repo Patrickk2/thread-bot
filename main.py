@@ -6,19 +6,13 @@ import email.utils
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# --- UTILS POUR LE NETTOYAGE ---
+# --- UTILS ---
 def safe_encode(text):
-    """
-    Force la conversion en ASCII pur (élimine tout caractère dont le code est >= 128).
-    C'est la méthode la plus robuste pour éviter les erreurs d'encodage (UnicodeEncodeError)
-    lors de la transmission SMTP et l'envoi vers des serveurs externes.
-    """
     if not isinstance(text, str):
         text = str(text)
     return "".join(char for char in text if ord(char) < 128)
 
 # --- CONFIGURATION ---
-# Nettoyage systématique des variables d'environnement dès le chargement
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GMAIL_USER = safe_encode(os.environ.get("GMAIL_USER", ""))
@@ -41,51 +35,78 @@ def fetch_articles():
             data = r.json()
             if data.get("articles"):
                 for a in data["articles"]:
-                    # Nettoyage à la source pour éviter tout caractère invisible
                     title = safe_encode(a.get('title', ''))
                     desc = safe_encode(a.get('description', ''))
                     articles.append(f"- {title}: {desc}")
         except Exception as e:
-            print(f"Erreur lors de la récupération des news pour {topic}: {e}")
-    # On limite à 9 articles pour garantir la stabilité de la génération
+            print(f"Error fetching news for {topic}: {e}")
     return "\n".join(articles[:9])
+
+# --- IMAGE LINKS ---
+TOPIC_KEYWORDS = {
+    "cybersecurity": "hacker+cybersecurity",
+    "artificial intelligence": "artificial+intelligence",
+    "anthropic": "artificial+intelligence+robot",
+    "breach": "data+breach+security",
+    "hack": "hacker+dark",
+    "surveillance": "surveillance+camera",
+    "water": "water+infrastructure",
+    "military": "cyber+warfare",
+    "bank": "banking+finance+security",
+    "privacy": "privacy+digital",
+    "ai": "artificial+intelligence",
+    "tech": "technology+future",
+}
+
+def get_image_links(thread_text):
+    thread_lower = thread_text.lower()
+    keyword = "cybersecurity+technology"
+    for key, val in TOPIC_KEYWORDS.items():
+        if key in thread_lower:
+            keyword = val
+            break
+    link1 = f"https://unsplash.com/s/photos/{keyword}"
+    link2 = f"https://www.pexels.com/search/{keyword.replace('+', '%20')}/"
+    return link1, link2
 
 # --- GENERATE THREADS ---
 def generate_threads(articles_text):
-    # Prompt renforcé avec des contraintes négatives strictes pour supprimer les parasites
-    prompt = f"""Tu es un créateur de contenu tech/cybersec francophone.
-À partir de ces actualités, génère exactement 3 threads Twitter/Threads en français.
-Chaque thread = 5 tweets max, percutants, informatifs, ton humain pas corporate.
+    prompt = f"""You are a viral tech/cybersecurity content creator.
+From these news articles, generate exactly 3 Threads posts in ENGLISH.
+Each post = 4 to 5 lines MAX. No more.
 
-RÈGLES ABSOLUES ET STRICTES :
-1. NE DONNE QUE LE CONTENU DES THREADS.
-2. PAS D'INTRODUCTION, PAS DE CONCLUSION.
-3. PAS DE LABELS DE SECURITE (Ex: NE PAS ECRIRE 'User Safety').
-4. PAS DE COMMENTAIRES MÉTADONNÉES.
-5. SORTIE BRUTE UNIQUEMENT.
+STRICT RULES:
+1. OUTPUT ONLY THE POSTS. NO intro, NO conclusion, NO metadata.
+2. Each post starts with a SHOCKING HOOK (a bold stat or provocative claim).
+3. High contrast writing: short punchy sentences. No corporate tone.
+4. End each post with one implicit call-to-action line.
+5. After each post, on a new line write: KEYWORDS: [2-3 topic keywords in English, comma separated]
 
-Format attendu :
+Format:
+POST 1
+[hook line]
+[line 2]
+[line 3]
+[line 4]
+[CTA line]
+KEYWORDS: keyword1, keyword2
 
-THREAD 1 — [Sujet]
-1/
-2/
-3/
+POST 2
 ...
 
-Actualités :
+News:
 {articles_text}
 """
-    
-    # Liste des modèles disponibles en cas d'échec de la requête
+
     models_to_try = [
         "openrouter/free",
         "deepseek/deepseek-chat-v3-0324:free",
         "meta-llama/llama-3.3-70b-instruct:free",
         "qwen/qwen3-coder:free"
     ]
-    
+
     for model in models_to_try:
-        print(f"Tentative de génération avec le modèle : {model}...")
+        print(f"Trying model: {model}...")
         try:
             response = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -102,25 +123,58 @@ Actualités :
                 timeout=45
             )
             data = response.json()
-            
+
             if "choices" in data:
-                print(f"✅ Succès avec {model} !")
-                # Extraction du contenu pur
+                print(f"Success with {model}!")
                 raw_content = data["choices"][0]["message"]["content"]
                 return safe_encode(raw_content)
-            
-            print(f"⚠️ Échec avec {model} : {data.get('error', {}).get('message', 'Erreur inconnue')}")
-            time.sleep(3) 
-            
-        except Exception as e:
-            print(f"❌ Erreur réseau avec {model} : {e}")
+
+            print(f"Failed with {model}: {data.get('error', {}).get('message', 'Unknown error')}")
             time.sleep(3)
-            
+
+        except Exception as e:
+            print(f"Network error with {model}: {e}")
+            time.sleep(3)
+
     return None
+
+# --- INJECT IMAGE LINKS ---
+def inject_image_links(threads_content):
+    lines = threads_content.split("\n")
+    output = []
+    post_buffer = []
+    keywords_line = ""
+
+    for line in lines:
+        if line.strip().startswith("KEYWORDS:"):
+            keywords_line = line.strip().replace("KEYWORDS:", "").strip()
+            # Build image links from keywords
+            kw = keywords_line.split(",")[0].strip().replace(" ", "+")
+            img1 = f"https://unsplash.com/s/photos/{kw}"
+            img2 = f"https://www.pexels.com/search/{kw.replace('+', '%20')}/"
+            post_buffer.append(f"")
+            post_buffer.append(f"[IMAGES]")
+            post_buffer.append(f"Unsplash: {img1}")
+            post_buffer.append(f"Pexels:   {img2}")
+            post_buffer.append(f"{'='*50}")
+            output.extend(post_buffer)
+            post_buffer = []
+            keywords_line = ""
+        elif line.strip().startswith("POST "):
+            if post_buffer:
+                output.extend(post_buffer)
+                post_buffer = []
+            post_buffer.append(line)
+        else:
+            post_buffer.append(line)
+
+    if post_buffer:
+        output.extend(post_buffer)
+
+    return "\n".join(output)
 
 # --- SEND EMAIL ---
 def send_email(threads_content):
-    # Nettoyage radical final du contenu avant envoi
     clean_content = safe_encode(threads_content)
 
     msg = MIMEMultipart()
@@ -130,37 +184,34 @@ def send_email(threads_content):
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
 
-    # Utilisation explicite de 'us-ascii' pour éviter toute interprétation erronée par SMTP
     msg.attach(MIMEText(clean_content, "plain", "us-ascii"))
 
     try:
-        # Connexion avec timeout pour éviter les blocages de session
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
             server.ehlo()
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            # Envoi des bytes directement pour contourner les codecs Python
             server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_bytes())
-        print("✅ Email envoyé avec succès.")
+        print("Email sent successfully.")
     except Exception as e:
-        print(f"❌ Erreur critique lors de l'envoi email : {e}")
+        print(f"Critical email error: {e}")
         raise e
 
 # --- MAIN ---
 if __name__ == "__main__":
-    # Vérification des credentials avant exécution
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        print("Erreur : Credentials Gmail manquants.")
+        print("Error: Missing Gmail credentials.")
         exit(1)
-        
+
     articles = fetch_articles()
     if not articles:
         print("No articles fetched.")
         exit(0)
-        
+
     threads = generate_threads(articles)
-    
+
     if threads:
-        send_email(threads)
+        final_content = inject_image_links(threads)
+        send_email(final_content)
     else:
-        print("❌ Échec total de la génération.")
+        print("Total generation failure.")
         exit(1)

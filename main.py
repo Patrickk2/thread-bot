@@ -22,17 +22,18 @@ GMAIL_APP_PASSWORD  = safe_encode(os.environ.get("GMAIL_APP_PASSWORD", ""))
 HF_TOKEN            = os.environ.get("HF_TOKEN", "")
 TO_EMAIL            = "elom.karl.patrick@gmail.com"
 
-TOPICS = ["cybersecurity", "artificial intelligence Claude Anthropic", "tech news"]
+TOPICS = ["cybersecurity", "artificial intelligence", "tech news"]
 
 HF_API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 
 # ─── FETCH NEWS ───────────────────────────────────────────────────────────────
 def fetch_articles():
     articles = []
+    seen_titles = set()
     for topic in TOPICS:
         url = (
             f"https://newsapi.org/v2/everything"
-            f"?q={topic}&language=en&sortBy=publishedAt&pageSize=3"
+            f"?q={topic}&language=en&sortBy=publishedAt&pageSize=5"
             f"&apiKey={NEWS_API_KEY}"
         )
         try:
@@ -41,56 +42,76 @@ def fetch_articles():
             if data.get("articles"):
                 for a in data["articles"]:
                     title = safe_encode(a.get('title', ''))
-                    desc  = safe_encode(a.get('description', ''))
+                    desc  = safe_encode(a.get('description', '') or '')
+                    # Deduplicate by title
+                    title_key = title.lower()[:60]
+                    if title_key in seen_titles or not title:
+                        continue
+                    seen_titles.add(title_key)
                     articles.append(f"- {title}: {desc}")
         except Exception as e:
             print(f"Error fetching news for {topic}: {e}")
+    # Return max 9 unique articles
     return "\n".join(articles[:9])
-
-# ─── IMAGE LINKS (removed) ───────────────────────────────────────────────────
 
 # ─── GENERATE THREADS ─────────────────────────────────────────────────────────
 def generate_threads(articles_text):
-    prompt = f"""You are a viral tech/cybersecurity content creator.
-From these news articles, generate exactly 3 Threads posts in ENGLISH.
-Each post = 4 to 5 lines MAX. No more.
+    prompt = f"""You are a viral tech/cybersecurity content creator for social media.
+From these news articles, generate exactly 3 DIFFERENT Threads posts in ENGLISH.
+Each post must cover a DIFFERENT article/topic. No repetition between posts.
 
-STRICT RULES:
-1. OUTPUT ONLY THE POSTS. NO intro, NO conclusion, NO metadata.
-2. Each post starts with a SHOCKING HOOK (a bold stat or provocative claim).
-3. High contrast writing: short punchy sentences. No corporate tone.
-4. End each post with one implicit call-to-action line.
-5. After each post, on a new line write: KEYWORDS: [2-3 topic keywords in English, comma separated]
-6. After KEYWORDS, write: IMAGE_PROMPT: [a scene description for image generation following EXACTLY this style guide:
-   - Photojournalism style, ultra-sharp, high contrast
-   - Dark or moody background (night city, server room, government building, storm clouds)
-   - Strong single light source: neon blue, orange, or white spotlight
-   - Foreground subject: a symbolic object or anonymous silhouette (NO real faces, NO named people)
-   - Mood: tense, urgent, breaking news energy
-   - Technical: 4K, f/1.8 depth of field, dramatic shadows, editorial photography
-   - Example: "anonymous hooded figure in silhouette, illuminated by blue neon glow, dark server room background, cables everywhere, smoke, ultra-sharp editorial photo, 4K, high contrast"]
+STRICT FORMAT — follow EXACTLY:
 
-Format:
 POST 1
-[hook line]
+[SHOCKING HOOK — bold stat or provocative claim, 1 line]
+[line 2]
+[line 3]
+[line 4]
+[CTA line — implicit, not "follow me"]
+KEYWORDS: keyword1, keyword2
+IMAGE_PROMPT: [scene description — see style below]
+
+POST 2
+[different topic from POST 1]
 [line 2]
 [line 3]
 [line 4]
 [CTA line]
 KEYWORDS: keyword1, keyword2
-IMAGE_PROMPT: anonymous hooded silhouette standing in front of glowing server racks, neon blue backlight, dark smoky atmosphere, ultra-sharp editorial photo, 4K high contrast
+IMAGE_PROMPT: [scene description]
 
-POST 2
-...
+POST 3
+[different topic from POST 1 and POST 2]
+[line 2]
+[line 3]
+[line 4]
+[CTA line]
+KEYWORDS: keyword1, keyword2
+IMAGE_PROMPT: [scene description]
+
+IMAGE_PROMPT STYLE GUIDE:
+- Photojournalism, ultra-sharp, high contrast editorial photo
+- Dark/moody background: night city, server room, government building, or storm
+- Single dramatic light source: neon blue, orange, or cold white spotlight
+- Subject: anonymous silhouette or symbolic object (NO real faces, NO named people)
+- Mood: tense, urgent, breaking news
+- Technical: 4K, f/1.8, deep shadows, no text, no watermark
+- Example: "anonymous hooded figure in silhouette, blue neon backlight, dark server room, smoke, cables, ultra-sharp editorial photo, 4K, high contrast, no text"
+
+RULES:
+- OUTPUT ONLY THE 3 POSTS. No intro, no conclusion, no explanation.
+- Each post = exactly 5 lines + KEYWORDS + IMAGE_PROMPT
+- Short punchy sentences. No corporate tone.
+- Each post on a DIFFERENT topic from the news below.
 
 News:
 {articles_text}
 """
 
     models_to_try = [
-        "openrouter/free",
         "deepseek/deepseek-chat-v3-0324:free",
         "meta-llama/llama-3.3-70b-instruct:free",
+        "openrouter/auto",
         "qwen/qwen3-coder:free"
     ]
 
@@ -103,7 +124,7 @@ News:
                     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": "https://github.com/Patrickk2/thread-bot",
-                    "X-Title": "Thread Bot GitHub Action"
+                    "X-Title": "Thread Bot"
                 },
                 json={
                     "model": model,
@@ -122,28 +143,61 @@ News:
             time.sleep(3)
     return None
 
-# ─── EXTRACT IMAGE PROMPTS ────────────────────────────────────────────────────
-def extract_image_prompts(threads_content):
-    prompts = []
-    for line in threads_content.split("\n"):
-        if line.strip().startswith("IMAGE_PROMPT:"):
-            prompt = line.strip().replace("IMAGE_PROMPT:", "").strip()
-            # Style injection: Petit Journal / media card aesthetic
-            styled = (
-                f"{prompt}, "
+# ─── EXTRACT DATA FROM THREADS ────────────────────────────────────────────────
+def extract_posts_data(threads_content):
+    """
+    Returns list of dicts: [{title, image_prompt}, ...]
+    title = hook line (first content line after POST N)
+    image_prompt = full styled prompt
+    """
+    posts = []
+    lines = threads_content.split("\n")
+    current_post = {}
+    in_post = False
+    hook_captured = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("POST ") and stripped[5:].strip().isdigit():
+            if current_post:
+                posts.append(current_post)
+            current_post = {"title": "", "image_prompt": ""}
+            in_post = True
+            hook_captured = False
+        elif in_post and not hook_captured and stripped and not stripped.startswith("KEYWORDS:") and not stripped.startswith("IMAGE_PROMPT:"):
+            current_post["title"] = stripped
+            hook_captured = True
+        elif stripped.startswith("IMAGE_PROMPT:"):
+            raw_prompt = stripped.replace("IMAGE_PROMPT:", "").strip()
+            current_post["image_prompt"] = (
+                f"{raw_prompt}, "
                 "photojournalism style, ultra-sharp editorial photo, "
-                "single dramatic light source neon blue or orange, "
+                "single dramatic neon blue or orange light source, "
                 "dark moody background, deep shadows, high contrast, "
                 "no text, no watermark, no logos, "
-                "Canon EOS R5, f/1.8, ISO 3200, 4K, award-winning press photo"
+                "Canon EOS R5, f/1.8, ISO 3200, 4K"
             )
-            prompts.append(styled)
-    return prompts[:3]  # max 3
+
+    if current_post:
+        posts.append(current_post)
+
+    return posts[:3]
+
+# ─── CLEAN TEXT FOR EMAIL BODY ────────────────────────────────────────────────
+def clean_threads_text(threads_content):
+    lines = threads_content.split("\n")
+    output = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("KEYWORDS:") or stripped.startswith("IMAGE_PROMPT:") or stripped == "=" * 50:
+            continue
+        output.append(line)
+    return "\n".join(output).strip()
 
 # ─── GENERATE IMAGE VIA HF ────────────────────────────────────────────────────
 def generate_hf_image(prompt):
     if not HF_TOKEN:
-        print("HF_TOKEN missing, skipping image generation")
+        print("HF_TOKEN missing")
         return None
 
     endpoints = [
@@ -151,33 +205,31 @@ def generate_hf_image(prompt):
         "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
         "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1",
     ]
-
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
     for endpoint in endpoints:
         for attempt in range(2):
             try:
-                print(f"Generating image (attempt {attempt+1}): {prompt[:60]}...")
+                print(f"Generating (attempt {attempt+1}): {prompt[:70]}...")
                 r = requests.post(endpoint, headers=headers, json={"inputs": prompt}, timeout=120)
                 if r.status_code == 200 and len(r.content) > 1000:
-                    print(f"Image generated OK from {endpoint.split('/')[2]}")
+                    print(f"Image OK from {endpoint.split('/')[2]}")
                     return r.content
                 elif r.status_code == 503:
-                    print(f"Model loading ({r.status_code}), waiting 20s...")
+                    print(f"Model loading, waiting 20s...")
                     time.sleep(20)
                 else:
                     print(f"HF error {r.status_code}: {r.text[:80]}")
                     break
             except Exception as e:
-                print(f"Image generation error: {e}")
+                print(f"Image error: {e}")
                 if attempt == 0:
                     time.sleep(5)
-    print("All image endpoints failed")
+    print("All endpoints failed")
     return None
 
 # ─── ADD OVERLAY (Petit Journal style) ───────────────────────────────────────
 def add_overlay(image_bytes, title_text):
-    """Add bold text overlay in Petit Journal style using Pillow."""
     try:
         from PIL import Image, ImageDraw, ImageFont
         import textwrap
@@ -185,64 +237,51 @@ def add_overlay(image_bytes, title_text):
         img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         w, h = img.size
 
-        # Dark gradient overlay at bottom
+        # Dark gradient at bottom third
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         draw_ov = ImageDraw.Draw(overlay)
-        for i in range(h // 3):
-            alpha = int(200 * (i / (h // 3)))
-            draw_ov.rectangle([(0, h - h//3 + i), (w, h - h//3 + i + 1)], fill=(0, 0, 0, alpha))
+        grad_height = h // 3
+        for i in range(grad_height):
+            alpha = int(210 * (i / grad_height))
+            draw_ov.rectangle([(0, h - grad_height + i), (w, h - grad_height + i + 1)], fill=(0, 0, 0, alpha))
         img = Image.alpha_composite(img, overlay)
-
         draw = ImageDraw.Draw(img)
 
-        # Font — fallback to default if no TTF available
+        # Font
+        font_size = int(h * 0.055)
         try:
-            font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size=int(h * 0.055))
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size=font_size)
         except:
-            font_big = ImageFont.load_default()
+            font = ImageFont.load_default()
 
-        # Wrap title
-        wrapped = textwrap.wrap(title_text.upper(), width=28)
+        # Clean title — strip markdown bold markers
+        clean_title = title_text.replace("**", "").replace("*", "").strip()
+        wrapped = textwrap.wrap(clean_title.upper(), width=26)
 
-        # Draw text bottom-left with orange accent on first word
-        y = h - (len(wrapped) * int(h * 0.07)) - int(h * 0.04)
+        y = h - (len(wrapped) * int(h * 0.072)) - int(h * 0.05)
         for i, line in enumerate(wrapped):
-            # First line: first word in orange, rest white
+            words = line.split(" ", 1)
+            x = int(w * 0.04)
             if i == 0:
-                words = line.split(" ", 1)
-                draw.text((int(w * 0.04), y), words[0], font=font_big, fill=(255, 90, 0, 255))
+                # First word orange
+                draw.text((x, y), words[0], font=font, fill=(255, 80, 0, 255))
                 if len(words) > 1:
-                    bbox = draw.textbbox((0, 0), words[0] + " ", font=font_big)
-                    draw.text((int(w * 0.04) + bbox[2], y), words[1], font=font_big, fill=(255, 255, 255, 255))
+                    bbox = draw.textbbox((0, 0), words[0] + " ", font=font)
+                    draw.text((x + bbox[2], y), words[1], font=font, fill=(255, 255, 255, 255))
             else:
-                draw.text((int(w * 0.04), y), line, font=font_big, fill=(255, 255, 255, 255))
-            y += int(h * 0.065)
+                draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+            y += int(h * 0.068)
 
-        # Convert back to RGB PNG
         final = img.convert("RGB")
         buf = io.BytesIO()
         final.save(buf, format="PNG")
         return buf.getvalue()
 
     except Exception as e:
-        print(f"Overlay error: {e} — sending raw image")
+        print(f"Overlay error: {e}")
         return image_bytes
 
-# ─── CLEAN TEXT (strip IMAGE_PROMPT / KEYWORDS from email body) ───────────────
-def clean_threads_text(threads_content):
-    """Keep only POST headers and post body lines. Strip metadata."""
-    lines = threads_content.split("\n")
-    output = []
-    skip_next = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("KEYWORDS:") or stripped.startswith("IMAGE_PROMPT:") or stripped == "=" * 50:
-            continue
-        output.append(line)
-    # Remove trailing blank lines between posts
-    return "\n".join(output).strip()
-
-# ─── SEND EMAIL ───────────────────────────────────────────────────────────────
+# ─── SEND EMAIL — single email only ──────────────────────────────────────────
 def send_email(threads_content, images=None):
     clean_content = safe_encode(threads_content)
 
@@ -255,14 +294,17 @@ def send_email(threads_content, images=None):
 
     msg.attach(MIMEText(clean_content, "plain", "us-ascii"))
 
+    attached = 0
     if images:
         for i, img_bytes in enumerate(images):
             if img_bytes:
                 part = MIMEImage(img_bytes, name=f"image_{i+1}.png")
                 part.add_header("Content-Disposition", "attachment", filename=f"image_{i+1}.png")
                 msg.attach(part)
+                attached += 1
                 print(f"Attached image {i+1}")
 
+    print(f"Sending email with {attached} image(s)...")
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
             server.ehlo()
@@ -270,7 +312,7 @@ def send_email(threads_content, images=None):
             server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_bytes())
         print("Email sent successfully.")
     except Exception as e:
-        print(f"Critical email error: {e}")
+        print(f"Email error: {e}")
         raise e
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -284,36 +326,29 @@ if __name__ == "__main__":
         print("No articles fetched.")
         exit(0)
 
+    print(f"Fetched {len(articles.splitlines())} unique articles")
+
     threads = generate_threads(articles)
     if not threads:
-        print("Total generation failure.")
+        print("Generation failure.")
         exit(1)
 
+    print("--- RAW LLM OUTPUT ---")
+    print(threads[:500])
+    print("---")
+
     final_content = clean_threads_text(threads)
+    posts_data = extract_posts_data(threads)
+    print(f"Extracted {len(posts_data)} posts with titles+prompts")
 
-    # Generate images
-    image_prompts = extract_image_prompts(threads)
     generated_images = []
-
-    for i, prompt in enumerate(image_prompts):
-        # Extract post title for overlay (first non-empty line after POST N)
-        post_lines = [l.strip() for l in threads.split("\n") if l.strip()]
-        title = prompt.split(",")[0]  # fallback
-        try:
-            post_markers = [j for j, l in enumerate(post_lines) if l.startswith(f"POST {i+1}")]
-            if post_markers:
-                title = post_lines[post_markers[0] + 1]
-        except:
-            pass
-
-        raw_img = generate_hf_image(prompt)
+    for i, post in enumerate(posts_data):
+        print(f"\n[POST {i+1}] Title: {post['title'][:60]}")
+        raw_img = generate_hf_image(post["image_prompt"])
         if raw_img:
-            styled_img = add_overlay(raw_img, title)
+            styled_img = add_overlay(raw_img, post["title"])
             generated_images.append(styled_img)
         else:
             generated_images.append(None)
 
     send_email(final_content, images=generated_images)
-
-
-

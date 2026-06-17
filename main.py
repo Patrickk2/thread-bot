@@ -61,7 +61,14 @@ STRICT RULES:
 3. High contrast writing: short punchy sentences. No corporate tone.
 4. End each post with one implicit call-to-action line.
 5. After each post, on a new line write: KEYWORDS: [2-3 topic keywords in English, comma separated]
-6. After KEYWORDS, write: IMAGE_PROMPT: [a vivid, cinematic scene description in English for image generation, NO real person names, fictional characters only]
+6. After KEYWORDS, write: IMAGE_PROMPT: [a scene description for image generation following EXACTLY this style guide:
+   - Photojournalism style, ultra-sharp, high contrast
+   - Dark or moody background (night city, server room, government building, storm clouds)
+   - Strong single light source: neon blue, orange, or white spotlight
+   - Foreground subject: a symbolic object or anonymous silhouette (NO real faces, NO named people)
+   - Mood: tense, urgent, breaking news energy
+   - Technical: 4K, f/1.8 depth of field, dramatic shadows, editorial photography
+   - Example: "anonymous hooded figure in silhouette, illuminated by blue neon glow, dark server room background, cables everywhere, smoke, ultra-sharp editorial photo, 4K, high contrast"]
 
 Format:
 POST 1
@@ -71,7 +78,7 @@ POST 1
 [line 4]
 [CTA line]
 KEYWORDS: keyword1, keyword2
-IMAGE_PROMPT: a dramatic scene of ...
+IMAGE_PROMPT: anonymous hooded silhouette standing in front of glowing server racks, neon blue backlight, dark smoky atmosphere, ultra-sharp editorial photo, 4K high contrast
 
 POST 2
 ...
@@ -124,9 +131,11 @@ def extract_image_prompts(threads_content):
             # Style injection: Petit Journal / media card aesthetic
             styled = (
                 f"{prompt}, "
-                "dark dramatic background, bold graphic design, "
-                "news media style, high contrast, cinematic lighting, "
-                "photorealistic, 4k sharp"
+                "photojournalism style, ultra-sharp editorial photo, "
+                "single dramatic light source neon blue or orange, "
+                "dark moody background, deep shadows, high contrast, "
+                "no text, no watermark, no logos, "
+                "Canon EOS R5, f/1.8, ISO 3200, 4K, award-winning press photo"
             )
             prompts.append(styled)
     return prompts[:3]  # max 3
@@ -305,5 +314,6 @@ if __name__ == "__main__":
             generated_images.append(None)
 
     send_email(final_content, images=generated_images)
+
 
 

@@ -22,7 +22,19 @@ GMAIL_APP_PASSWORD  = safe_encode(os.environ.get("GMAIL_APP_PASSWORD", ""))
 HF_TOKEN            = os.environ.get("HF_TOKEN", "")
 TO_EMAIL            = "elom.karl.patrick@gmail.com"
 
-TOPICS = ["cybersecurity", "artificial intelligence", "tech news"]
+# TARGETED QUERIES — concrete facts only
+TOPICS = [
+    "CVE-2024",
+    "data breach $1M",
+    "Google sued",
+    "Microsoft hacked",
+    "Cloudflare vulnerability",
+    "AWS zero-day",
+    "ransomware attack",
+    "AI security exploit",
+    "phishing campaign",
+    "supply chain attack"
+]
 
 HF_API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 
@@ -47,12 +59,61 @@ def fetch_articles():
                     title_key = title.lower()[:60]
                     if title_key in seen_titles or not title:
                         continue
+                    
+                    # FILTERING RULE: Extract a concrete fact (name, CVE, $, date)
+                    # If none found, skip this article
+                    if not has_concrete_fact(title, desc):
+                        print(f"Skipping vague article: {title[:50]}")
+                        continue
+                    
                     seen_titles.add(title_key)
                     articles.append(f"- {title}: {desc}")
         except Exception as e:
             print(f"Error fetching news for {topic}: {e}")
     # Return max 9 unique articles
     return "\n".join(articles[:9])
+
+def has_concrete_fact(title, desc):
+    """
+    Check if article contains at least ONE concrete fact:
+    - Company name (Google, Microsoft, Apple, Amazon, etc.)
+    - CVE number (CVE-XXXX-XXXXX)
+    - Money amount ($XXX, €, million)
+    - Specific date (2024, June, etc.)
+    - Action verb (sued, hacked, fined, banned, breached)
+    """
+    companies = [
+        "google", "microsoft", "apple", "amazon", "meta", "facebook",
+        "cloudflare", "aws", "openai", "anthropic", "nvidia", "intel",
+        "uber", "stripe", "twitter", "x corp", "github", "gitlab",
+        "cisco", "ibm", "oracle", "salesforce", "slack", "zoom"
+    ]
+    
+    action_verbs = [
+        "sued", "hack", "fine", "ban", "breach", "leak", "stolen",
+        "exploit", "vulnerability", "attack", "arrest", "charge",
+        "recall", "withdraw", "shutdown", "restrict"
+    ]
+    
+    combined_text = (title + " " + desc).lower()
+    
+    # Check for company names
+    if any(company in combined_text for company in companies):
+        return True
+    
+    # Check for CVE
+    if "cve-20" in combined_text:
+        return True
+    
+    # Check for money amounts
+    if "$" in combined_text or " million " in combined_text or " billion " in combined_text:
+        return True
+    
+    # Check for action verbs
+    if any(verb in combined_text for verb in action_verbs):
+        return True
+    
+    return False
 
 # ─── GENERATE THREADS ─────────────────────────────────────────────────────────
 def generate_threads(articles_text):
@@ -329,10 +390,10 @@ if __name__ == "__main__":
 
     articles = fetch_articles()
     if not articles:
-        print("No articles fetched.")
+        print("No articles fetched (all filtered out as too vague).")
         exit(0)
 
-    print(f"Fetched {len(articles.splitlines())} unique articles")
+    print(f"Fetched {len(articles.splitlines())} unique, concrete articles")
 
     threads = generate_threads(articles)
     if not threads:
@@ -358,4 +419,3 @@ if __name__ == "__main__":
             generated_images.append(None)
 
     send_email(final_content, images=generated_images)
-
